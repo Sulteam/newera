@@ -8,8 +8,9 @@ from cocotb.runner import get_runner
 
 async def generate_clock(dut):
     """Generate clock and initial condition"""
-    dut.clk_counter.value = 0
-    dut.tx_data.value     = 0
+    dut.clk_counter.value  = 0
+    dut.data_dec.value     = 0
+    
     for cycle in range(100000):
         dut.clk.value = 0
         await Timer(25, 'ns')
@@ -19,23 +20,22 @@ async def generate_clock(dut):
 @cocotb.test()
 async def manch_basic_test(dut):
     cocotb.start_soon(generate_clock(dut))
-    test_input = [0, 0, 0, 0, 0, 1, 0]
+    test_input = [0, 0, 1, 0, 0, 1, 0]
 
     for bit in test_input:
         if bit == 0:  
             # передаем 0 
-            dut.rx_data.value = 1
+            dut.data_manch.value = 1
             await Timer(4050, 'ns')
-            dut.rx_data.value = 0
+            dut.data_manch.value = 0
             await Timer(4050, 'ns')    
         else:
             # передаем 1 
-            dut.rx_data.value = 0
+            dut.data_manch.value = 0
             await Timer(4050, 'ns')
-            dut.rx_data.value = 1
+            dut.data_manch.value = 1
             await Timer(4050, 'ns')             
   
-
 
 def test_manch_runner():
     hdl_toplevel_lang = os.getenv("HDL_TOPLEVEL_LANG", "verilog")

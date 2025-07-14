@@ -5,8 +5,8 @@ module decoder_manch #(
 
 ) (
   input  wire clk, 
-  input  wire rx_data,
-  output reg  tx_data
+  input  wire data_manch,
+  output reg  data_dec
 
 );
   initial begin
@@ -23,22 +23,22 @@ module decoder_manch #(
 
   // Формирование rising и falling edge 
   reg  prev_data;
-  wire rising_edge  = (prev_data == 0 ) && (rx_data == 1);
-  wire falling_edge = (prev_data == 1 ) && (rx_data == 0);
+  wire rising_edge  = (prev_data == 0 ) && (data_manch == 1);
+  wire falling_edge = (prev_data == 1 ) && (data_manch == 0);
 
   always @(posedge clk) begin
-    prev_data    <= rx_data;
+    prev_data    <= data_manch;
     clk_counter  <= clk_counter + 1;
     if (rising_edge == 1'b1) begin
       if ((clk_counter >= FULLBAUD ) && (clk_counter <= FULLBAUD + FULLBAUD )) begin
-        tx_data <= 1'b1;
+        data_dec <= 1'b1;
         clk_counter <= 0; 
       end
     end
 
     if (falling_edge == 1'b1) begin
       if ((clk_counter >= FULLBAUD ) && (clk_counter <= FULLBAUD + FULLBAUD )) begin
-        tx_data <= 1'b0;
+        data_dec <= 1'b0;
         clk_counter <= 0; 
       end
     end

@@ -1,7 +1,7 @@
 `timescale 1ns/1ns
 module packager #(
   parameter ADC_DATA_WIDTH = 16,
-  parameter ADC_COUNT = 6
+  parameter ADC_COUNT      = 6
  
 ) (
   input wire                          clk,
@@ -37,7 +37,7 @@ module packager #(
   reg [ADC_DATA_WIDTH - 1 : 0] array_data_adc [0: ADC_COUNT - 1];
 
 
-  localparam START_BYTE = 8'hFF;
+  localparam START_BYTE = 8'h00;
   reg [2 :0] adc_index;
   reg [1 :0] byte_index;
 
@@ -82,7 +82,7 @@ module packager #(
       end
       if (adc_index == ADC_COUNT) begin
         data_valid <= 1'b1;
-        data_out <= 0;
+        data_out <= 8'hFF;
         state <= IDLE;
       end
     end

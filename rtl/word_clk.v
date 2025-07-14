@@ -8,7 +8,7 @@ module word_clk #(
 );
   
   localparam bit_width = $clog2(DIVCLK);  
-  reg [bit_width :0] word_count = 0;
+  reg [bit_width :0] word_count;
 
   always @(posedge mclkin) begin
     word_count <= word_count + 16'b1;

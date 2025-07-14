@@ -1,130 +1,172 @@
 module uart_tx #(
-  // Параметры UART
-  parameter DATA_BITS = 8,
-  parameter STOP_BITS = 1,
-  parameter FIRST_BIT = "lsb",
-  parameter PARITY_TYPE = "none",
-  // Тайминг параметры
-  parameter BAUDRATE = 115200,
-  parameter CLK_FREQ = 75_000_000  
+    // UART frame parameters
+    parameter DATA_BITS   = 8,        // Range 5 to 8
+    parameter DATA_MANCH = 16;
+    // Timing parameters
+    parameter BAUDRATE    = 115200,
+    parameter CLK_FREQ    = 18_750_000
 ) (
-  input wire clk,
-  //Линия передачи 
-  output reg tx,
-  output reg busy,   
-  // Передача 
-  input wire tx_valid,
-  input wire [DATA_BITS - 1 : 0] tx_data
-
+    input  wire clk,
+    input  wire reset,      // active high
+    // Serial lines
+    output reg  tx,
+    // Transmitted message interface
+    output wire tx_ready,
+    input  wire tx_valid,
+    input  wire [DATA_BITS-1:0] tx_data
 );
 
-  // Состояния конечного автомата 
-parameter IDLE_S       = 2'b01;
-parameter TRANSMIT_S   = 2'b10;
+  initial begin
+    $dumpfile("uart.vcd");
+    $dumpvars(1, uart_tx);
+  end
 
-// Внутренние параметры 
+// State machine states 
+parameter RESET_S    = 3'b000,
+          IDLE_S     = 3'b001,
+          RECEIVE_S  = 3'b010,
+          TRANSMIT_S = 3'b011,
+          COOLDOWN_S = 3'b100;          
+// Constants
 localparam FULLBAUD = CLK_FREQ / BAUDRATE;
-localparam SR_LEN = DATA_BITS +
+localparam HALFBAUD = FULLBAUD / 2;
+localparam SR_LEN = DATA_MANCH + 
                    ((PARITY_TYPE != "none") ? 1 : 0) + 
-                   STOP_BITS;
+                   STOP_BITS*2;
 
-// Внутренние провода 
+// Internal signals
 reg [2:0] state;  
+reg rx_valid_sig;
+reg tx_ready_sig;
+reg [SR_LEN-1:0] rx_shiftreg;
 reg [SR_LEN-1:0] tx_shiftreg;
 reg [31:0] clk_counter;
 reg [31:0] baud_counter;
+reg [STOP_BITS-1:0] fullstop;
+wire [DATA_MANCH - 1 : 0] data_manchester;
 
-// Функция инвертирования данных   
-function [DATA_BITS - 1 : 0] reverse_slv;
-  input [DATA_BITS - 1: 0] data;
-  integer i;
-  begin
-    reverse_slv = 0;
-    for (i = 0; i < DATA_BITS; i = i + 1)
-      reverse_slv[i] = data[DATA_BITS - 1 - i];
+
+initial begin
+    fullstop = {STOP_BITS{1'b1}};
+end
+
+// Generate manchester DATA for lsb
+genvar i;
+generate for (i = 0; i < DATA_BITS; i = i + 1)
+  begin : gen_manchester
+     assign data_manchester[2*i] =      tx_data[i];
+     assign data_manchester[2*i + 1] = ~tx_data[i];
   end
-endfunction
+endgenerate
 
-// Функция вычисления бита паритета
-function parity_bit;
-  input [DATA_BITS-1:0] data;
-  integer i;
-  reg result;
-  begin
-    result = 0;
-    for (i = 0; i < DATA_BITS; i = i + 1)
-      result = result ^ data[i];
-      parity_bit = result;
-  end
-endfunction
 
-// Функция проверки паритета
-function parity_check;
-  input [DATA_BITS-1:0] data;
-  input [255:0] parity_type; 
-  reg parity;
-  begin
-    parity = ^data; 
-        
-    if (parity_type == "none")
-      parity_check = 1'b1;
-      else if (parity_type == "even")
-        parity_check = ~parity;
-      else // "odd"
-        parity_check = parity;
-  end
-endfunction
+// Main state machine
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        state <= RESET_S;
+        rx_data <= {DATA_BITS{1'b0}};
+        tx <= 1'b1;
+        rx_valid_sig <= 1'b0;
+        tx_ready_sig <= 1'b0;
+        rx_shiftreg <= {SR_LEN{1'b1}};
+        tx_shiftreg <= {SR_LEN{1'b1}};
+        clk_counter <= 0;
+        baud_counter <= 0;
+    end
+    else begin
+        // If Rx ready/valid handshake occurred, outdate Rx data
+        if (rx_ready && rx_valid_sig) begin
+            rx_valid_sig <= 1'b0;
+        end
 
-// Основной конечный автомат
-always @(posedge clk) begin
-  begin
-    case (state)
-      // IDLE STATE
-        IDLE_S: begin
-          busy <= 1'b0;
-          // Переход к передаче данных при новых данных 
-          if (tx_valid == 1'b1) begin
-            state <= TRANSMIT_S;
-            tx <= 1'b0;
-					if (FIRST_BIT == "msb") begin
-            tx_shiftreg[SR_LEN-1 -: DATA_BITS] <= tx_data;
-          end else begin // "lsb"
-            tx_shiftreg[SR_LEN-1 -: DATA_BITS] <= reverse_slv(tx_data);
-          end
-						tx_shiftreg[STOP_BITS-1:0] <= {STOP_BITS{1'b1}};
-          end
-          end
+
+        case (state)
+            // IDLE STATE
+            IDLE_S: begin
+                clk_counter <= clk_counter + 1;
+
+                if (clk_counter == HALFBAUD-1) begin
+                  tx <= 1'b0;
+                end else if (clk_counter == FULLBAUD-1 && tx_valid == 0) begin
+                  tx <= 1'b1;
+                  clk_counter <= 0;
+                end
+                if (clk_counter == FULLBAUD-1 && tx_valid == 1) begin
+                  tx_ready_sig <= 1'b1;
+                end
+                // Switch to transmit state if new data available
+                if (tx_ready_sig && tx_valid) begin
+                    state <= TRANSMIT_S;
+                    tx_ready_sig <= 1'b0;
+                    tx_en_n <= 1'b0;
+                    tx <= 1'b1;
+                    
+                    
+                    // Add stop bits
+                    tx_shiftreg[STOP_BITS-1:0] <= {STOP_BITS{1'b1}};
+                end
+                // Switch to receive state if rx line asserted and ready to accept
+                else if (~rx && rx_ready) begin
+                    state <= RECEIVE_S;
+                    tx_ready_sig <= 1'b0;
+                    clk_counter <= clk_counter + 1;
+                end
+            end
             
             // TRANSMIT STATE
-        TRANSMIT_S: begin
-          clk_counter <= clk_counter + 1;
-          busy <= 1'b1;
-          // Выталкивать новый бит из буфера в линию каждый полный цикл передачи данных
-              if (clk_counter == FULLBAUD-1) begin
-                tx <= tx_shiftreg[SR_LEN-1];
-                tx_shiftreg <= {tx_shiftreg[SR_LEN-2:0], 1'b1};
-                baud_counter <= baud_counter + 1;
-                clk_counter <= 0; 
-              end
+            TRANSMIT_S: begin
+                clk_counter <= clk_counter + 1;
                 
-            // На последнем такте передачи перейти в IDLE
-              if (baud_counter == SR_LEN && clk_counter == FULLBAUD-1) begin
+                // The second half of the Manchester code for the start bit
+                if (clk_counter == HALFBAUD-1 && baud_counter == 0) begin
+                  tx <= 1'b1;
+                end
+                
+                // Push new bit from buffer onto line every full baud cycle
+                if (clk_counter == FULLBAUD-1) begin
+                    tx <= tx_shiftreg[SR_LEN-1];
+                    tx_shiftreg <= {tx_shiftreg[SR_LEN-2:0], 1'b1};
+                    baud_counter <= baud_counter + 1;
+                    clk_counter <= 0;
+                end
+
+                if (clk_counter == HALFBAUD-1 && baud_counter !== 0) begin
+                    tx <= tx_shiftreg[SR_LEN-1];
+                    tx_shiftreg <= {tx_shiftreg[SR_LEN-2:0], 1'b1};
+                end
+                
+                // On last clock cycle of transmission, go idle
+                if (baud_counter == SR_LEN && clk_counter == FULLBAUD-1) begin
+                    state <= IDLE_S;
+                    tx <= 1'b1;
+                    tx_en_n <= 1'b1;
+                    clk_counter <= 0;
+                    baud_counter <= 0;
+                end
+            end
+            
+            // RESET STATE
+            RESET_S: begin
                 state <= IDLE_S;
-                tx <= 1'b1;
-                clk_counter <= 0;
-                baud_counter <= 0;
-              end
+                tx_ready_sig <= 1'b1;
             end
             
             default: begin
-                state <= IDLE_S;
+                state <= RESET_S;
+                rx_data <= {DATA_BITS{1'b0}};
+                rx_valid_sig <= 1'b0;
+                tx_ready_sig <= 1'b0;
                 tx <= 1'b1;
+                tx_en_n <= 1'b1;
                 tx_shiftreg <= {SR_LEN{1'b1}};
+                rx_shiftreg <= {SR_LEN{1'b1}};
                 clk_counter <= 0;
                 baud_counter <= 0;
             end
         endcase
     end
 end
+
+assign tx_ready = tx_ready_sig;
 
 endmodule
