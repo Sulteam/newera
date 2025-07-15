@@ -7,6 +7,7 @@ module packager #(
   input wire                          clk,
   input wire                          rst,
 
+  // ADC Data Inputs
   input wire [ADC_DATA_WIDTH - 1 : 0] data_adc0,
   input wire [ADC_DATA_WIDTH - 1 : 0] data_adc1,
   input wire [ADC_DATA_WIDTH - 1 : 0] data_adc2,
@@ -14,12 +15,14 @@ module packager #(
   input wire [ADC_DATA_WIDTH - 1 : 0] data_adc4,
   input wire [ADC_DATA_WIDTH - 1 : 0] data_adc5,
  
+  // Control signal
   input wire                          write_enable,
-  input wire                          sync_pulse, 
-  input wire                          busy,
 
+  
+  
+  input wire                          tx_ready,
   output reg [7 :0]                   data_out,
-  output reg                          data_valid
+  output reg                          tx_valid
 
 );
   
@@ -33,63 +36,79 @@ module packager #(
                    TR_START_BIT = 01,
                    TR_ADC_DATA  = 10;
   reg [1 : 0] state;
-  // Внутренние сигналы и регистры  
+  // Internal wires   
   reg [ADC_DATA_WIDTH - 1 : 0] array_data_adc [0: ADC_COUNT - 1];
-
-
-  localparam START_BYTE = 8'h00;
   reg [2 :0] adc_index;
   reg [1 :0] byte_index;
 
-  always @(posedge clk or posedge rst) begin
-    case ( state )
-    IDLE:begin
-      data_valid <= 1'b0;
-      byte_index <= 1'b0;
-      if (write_enable == 1'b1 ) begin
-        array_data_adc[0] <= data_adc0;
-        array_data_adc[1] <= data_adc1;
-        array_data_adc[2] <= data_adc2;
-        array_data_adc[3] <= data_adc3;
-        array_data_adc[4] <= data_adc4;
-        array_data_adc[5] <= data_adc5;
+  // Constant 
+  localparam START_BYTE = 8'h00;
+  localparam END_BYTE   = 8'hFF;
 
-      end
-      if (busy == 1'b0 && sync_pulse == 1'b1) begin
-        state <= TR_START_BIT;
-      end
-    end
-    TR_START_BIT:begin
-      data_out   <= START_BYTE;
-      data_valid <= 1'b1;
+
+  always @(posedge clk or posedge rst) begin
+    if (reset) begin
+      state <= IDLE;
+      tx_valid <= 1'b0;
       adc_index  <= 0;
       byte_index <= 0;
-      state <= TR_ADC_DATA;
-    end
-    TR_ADC_DATA:begin
-      if (adc_index < ADC_COUNT && busy == 1'b0) begin 
-        data_out <= byte_index ? array_data_adc[adc_index] [7 : 0] : array_data_adc[adc_index] [15 : 8];
-        if (byte_index == 1'b0) begin
-          byte_index <= 1'b1;
-        end else begin
-          byte_index <= 1'b0;
-          adc_index  <= adc_index + 1;
+
+      for (int i; i < ADC_COUNT; i = i + 1) begin
+        array_data_adc[i] <= 0; 
+      end 
+    end else begin
+      case ( state )
+      IDLE:begin
+        tx_valid <= 1'b0;
+        byte_index <= 1'b0;
+
+        if ( write_enable == 1'b1 ) begin
+          array_data_adc[0] <= data_adc0;
+          array_data_adc[1] <= data_adc1;
+          array_data_adc[2] <= data_adc2;
+          array_data_adc[3] <= data_adc3;
+          array_data_adc[4] <= data_adc4;
+          array_data_adc[5] <= data_adc5;
+  
         end
+        if (tx_ready) begin
+          state <= TR_START_BIT;
+        end
+      end
+      TR_START_BIT:begin
+        data_out   <= START_BYTE;
+        tx_valid <= 1'b1;
+        adc_index  <= 0;
+        byte_index <= 0;
+        if (!tx_ready && tx_valid) begin
+          state <= TR_ADC_DATA;
+          tx_valid <= 1'b0;
+        end
+      end
+      TR_ADC_DATA:begin
+        if (adc_index < ADC_COUNT) begin 
+          data_out <= byte_index ? array_data_adc[adc_index] [7 : 0] : array_data_adc[adc_index] [15 : 8];
+          tx_valid <= 1'b1;
+        end
+        if (!tx_ready && tx_valid) begin 
+          tx_valid <= 1'b0;
+          if (byte_index == 1'b0) begin
+            byte_index <= 1'b1;
+          end else begin
+            byte_index <= 1'b0;
+            adc_index  <= adc_index + 1;
+          end
+        end 
         if (adc_index == ADC_COUNT) begin
-          data_valid <= 1'b1;
+          tx_valid <= 1'b1;
+          data_out <= END_BYTE;
           state <= IDLE;
         end
       end
-      if (adc_index == ADC_COUNT) begin
-        data_valid <= 1'b1;
-        data_out <= 8'hFF;
-        state <= IDLE;
-      end
+      endcase
+      
     end
-    endcase
-    
   end
-
 
 
 endmodule

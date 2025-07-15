@@ -21,7 +21,10 @@ module top #(
   wire      mdat_i3;
   wire      mdat_u3;
 
+  // internal wires for packager
   wire      data_out;
+  wire      tx_ready_pac;
+  wire      tx_valid_pac;
 
   wire      word_clk;
 
@@ -118,25 +121,24 @@ module top #(
   .data_adc5(FILTERED_DATA_U3),
 
   .write_enable(word_clk),
-  .sync_pulse(),
-  .busy(),
-
-  .
+  .tx_ready(tx_ready_pac),
+  .tx_valid(tx_valid_pac),
+  .data_out(data_out)
 
 );
   
   uart_tx #(
   .DATA_BITS(8),
-  .STOP_BITS(1),
-  .FIRST_BIT("msb"),
+  .STOP_BITS(2),
   .BAUDRATE(115200),
   .CLK_FREQ(18_750_000)
   
 ) send_data (
   .clk(clk),
   .tx(data_tx),
-  .tx_valid(word_clk),
-  .tx_data(FILTERED_DATA_I)
+  .tx_valid(tx_ready_pac),
+  .tx_ready(tx_valid_pac),
+  .tx_data(data_out)
   
 );  
   

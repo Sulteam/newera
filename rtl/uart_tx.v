@@ -1,7 +1,8 @@
+`timescale 1ps/1ps
 module uart_tx #(
     // UART frame parameters
     parameter DATA_BITS   = 8,        // Range 5 to 8
-    parameter DATA_MANCH = 16;
+    parameter STOP_BITS   = 2,
     // Timing parameters
     parameter BAUDRATE    = 115200,
     parameter CLK_FREQ    = 18_750_000
@@ -22,40 +23,30 @@ module uart_tx #(
   end
 
 // State machine states 
-parameter RESET_S    = 3'b000,
-          IDLE_S     = 3'b001,
-          RECEIVE_S  = 3'b010,
-          TRANSMIT_S = 3'b011,
-          COOLDOWN_S = 3'b100;          
+parameter RESET_S         = 2'b00,
+          IDLE_S          = 2'b01,
+          TRANSMIT_MSB_S  = 2'b10,
+          TRANSMIT_LSB_S =  2'b11;      
 // Constants
 localparam FULLBAUD = CLK_FREQ / BAUDRATE;
 localparam HALFBAUD = FULLBAUD / 2;
-localparam SR_LEN = DATA_MANCH + 
-                   ((PARITY_TYPE != "none") ? 1 : 0) + 
-                   STOP_BITS*2;
+localparam SR_LEN = DATA_BITS + STOP_BITS;
 
 // Internal signals
-reg [2:0] state;  
-reg rx_valid_sig;
+reg [1:0] state; 
 reg tx_ready_sig;
-reg [SR_LEN-1:0] rx_shiftreg;
 reg [SR_LEN-1:0] tx_shiftreg;
 reg [31:0] clk_counter;
 reg [31:0] baud_counter;
-reg [STOP_BITS-1:0] fullstop;
-wire [DATA_MANCH - 1 : 0] data_manchester;
-
-
-initial begin
-    fullstop = {STOP_BITS{1'b1}};
-end
+wire [DATA_BITS*2 - 1 : 0] data_manchester;
+reg nibble;
 
 // Generate manchester DATA for lsb
 genvar i;
 generate for (i = 0; i < DATA_BITS; i = i + 1)
   begin : gen_manchester
      assign data_manchester[2*i] =      tx_data[i];
-     assign data_manchester[2*i + 1] = ~tx_data[i];
+     assign data_manchester[2*i + 1] =  ~tx_data[i];
   end
 endgenerate
 
@@ -64,62 +55,79 @@ endgenerate
 always @(posedge clk or posedge reset) begin
     if (reset) begin
         state <= RESET_S;
-        rx_data <= {DATA_BITS{1'b0}};
-        tx <= 1'b1;
-        rx_valid_sig <= 1'b0;
+        tx <= 1'b0;
         tx_ready_sig <= 1'b0;
-        rx_shiftreg <= {SR_LEN{1'b1}};
         tx_shiftreg <= {SR_LEN{1'b1}};
         clk_counter <= 0;
         baud_counter <= 0;
     end
     else begin
-        // If Rx ready/valid handshake occurred, outdate Rx data
-        if (rx_ready && rx_valid_sig) begin
-            rx_valid_sig <= 1'b0;
-        end
-
 
         case (state)
             // IDLE STATE
             IDLE_S: begin
                 clk_counter <= clk_counter + 1;
-
+                tx_ready_sig <= 1'b1;
                 if (clk_counter == HALFBAUD-1) begin
-                  tx <= 1'b0;
-                end else if (clk_counter == FULLBAUD-1 && tx_valid == 0) begin
                   tx <= 1'b1;
+                end else if (clk_counter == FULLBAUD-1 && tx_valid == 0) begin
+                  tx <= 1'b0;
                   clk_counter <= 0;
                 end
-                if (clk_counter == FULLBAUD-1 && tx_valid == 1) begin
-                  tx_ready_sig <= 1'b1;
-                end
                 // Switch to transmit state if new data available
-                if (tx_ready_sig && tx_valid) begin
-                    state <= TRANSMIT_S;
+                if (tx_ready_sig && tx_valid && clk_counter == FULLBAUD-1) begin
+                    state <= TRANSMIT_MSB_S;
+                    clk_counter <= 0;
                     tx_ready_sig <= 1'b0;
-                    tx_en_n <= 1'b0;
                     tx <= 1'b1;
-                    
-                    
+                    tx_shiftreg[SR_LEN-1 -: DATA_BITS] <= data_manchester[DATA_BITS*2 - 1 : DATA_BITS];
                     // Add stop bits
-                    tx_shiftreg[STOP_BITS-1:0] <= {STOP_BITS{1'b1}};
-                end
-                // Switch to receive state if rx line asserted and ready to accept
-                else if (~rx && rx_ready) begin
-                    state <= RECEIVE_S;
-                    tx_ready_sig <= 1'b0;
-                    clk_counter <= clk_counter + 1;
+                    tx_shiftreg[STOP_BITS-1:0] <= {1'b0, 1'b1};
                 end
             end
             
             // TRANSMIT STATE
-            TRANSMIT_S: begin
+            TRANSMIT_MSB_S: begin
                 clk_counter <= clk_counter + 1;
                 
                 // The second half of the Manchester code for the start bit
                 if (clk_counter == HALFBAUD-1 && baud_counter == 0) begin
-                  tx <= 1'b1;
+                  tx <= 1'b0;
+                end
+                
+                // Push new bit from buffer onto line every full baud cycle
+                if (clk_counter == FULLBAUD-1) begin
+                    tx <= tx_shiftreg[SR_LEN-1];
+                    tx_shiftreg <= {tx_shiftreg[SR_LEN-2:0], 1'b1};
+                    baud_counter <= baud_counter + 1;
+                    clk_counter <= 0;
+                end
+
+                if (clk_counter == HALFBAUD-1 && baud_counter !== 0) begin
+                    baud_counter <= baud_counter + 1;
+                    tx <= tx_shiftreg[SR_LEN-1];
+                    tx_shiftreg <= {tx_shiftreg[SR_LEN-2:0], 1'b1};
+                end
+                
+                // On last clock cycle of transmission, go idle
+                if (baud_counter == SR_LEN && clk_counter == FULLBAUD-1) begin
+                    state <= TRANSMIT_LSB_S;
+                    tx_shiftreg[SR_LEN-1 -: DATA_BITS] <= data_manchester[DATA_BITS - 1 : 0];
+                    tx <= 1'b1;
+                    clk_counter <= 0;
+                    baud_counter <= 0;
+                    //add stop bit
+                    tx_shiftreg[STOP_BITS-1:0] <= {1'b0, 1'b1};
+                end
+            end
+
+            // TRANSMIT STATE
+            TRANSMIT_LSB_S: begin
+                clk_counter <= clk_counter + 1;
+                
+                // The second half of the Manchester code for the start bit
+                if (clk_counter == HALFBAUD-1 && baud_counter == 0) begin
+                  tx <= 1'b0;
                 end
                 
                 // Push new bit from buffer onto line every full baud cycle
@@ -133,13 +141,13 @@ always @(posedge clk or posedge reset) begin
                 if (clk_counter == HALFBAUD-1 && baud_counter !== 0) begin
                     tx <= tx_shiftreg[SR_LEN-1];
                     tx_shiftreg <= {tx_shiftreg[SR_LEN-2:0], 1'b1};
+                    baud_counter <= baud_counter + 1;
                 end
                 
                 // On last clock cycle of transmission, go idle
-                if (baud_counter == SR_LEN && clk_counter == FULLBAUD-1) begin
+                if (baud_counter == SR_LEN - 2 && clk_counter == FULLBAUD-1) begin
                     state <= IDLE_S;
-                    tx <= 1'b1;
-                    tx_en_n <= 1'b1;
+                    tx <= 1'b0;
                     clk_counter <= 0;
                     baud_counter <= 0;
                 end
@@ -148,18 +156,14 @@ always @(posedge clk or posedge reset) begin
             // RESET STATE
             RESET_S: begin
                 state <= IDLE_S;
-                tx_ready_sig <= 1'b1;
+                tx_ready_sig <= 1'b0;
             end
             
             default: begin
                 state <= RESET_S;
-                rx_data <= {DATA_BITS{1'b0}};
-                rx_valid_sig <= 1'b0;
                 tx_ready_sig <= 1'b0;
-                tx <= 1'b1;
-                tx_en_n <= 1'b1;
+                tx <= 1'b0;
                 tx_shiftreg <= {SR_LEN{1'b1}};
-                rx_shiftreg <= {SR_LEN{1'b1}};
                 clk_counter <= 0;
                 baud_counter <= 0;
             end
