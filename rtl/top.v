@@ -1,15 +1,17 @@
 module top #(
   parameter WIDTH = 16 
   ) (
-    input    clk,               // тактовая частота в 75 МГц
-    input    data_in_i1,        // сигма-дельта модуляция 
-    input    data_in_u1,        // сигма-дельта модуляция 
-    input    data_in_i2,
-    input    data_in_u2,
-    input    data_in_i3,
-    input    data_in_u3,
-    output   mclkin,           // тактовая частота для АЦП
-    output   data_tx           // манчестерский код 
+    input    clk,               // 75 MHz
+    input    rst,
+    input    data_in_i1,        // sigma-delta modulation 
+    input    data_in_u1,        // sigma-delta modulation 
+    input    data_in_i2,        // sigma-delta modulation 
+    input    data_in_u2,        // sigma-delta modulation 
+    input    data_in_i3,        // sigma-delta modulation 
+    input    data_in_u3,        // sigma-delta modulation 
+
+    output   mclkin,            // CLK for ADC
+    output   data_tx            // Manchester data
      
 
 );
@@ -26,7 +28,11 @@ module top #(
   wire      tx_ready_pac;
   wire      tx_valid_pac;
 
+  // Internal wires for word_clk
   wire      word_clk;
+
+  // Internal wires for transmit start
+  wire      tr_start;
 
   wire  [WIDTH - 1 :0]  FILTERED_DATA_I1;
   wire  [WIDTH - 1 :0]  FILTERED_DATA_U1;
@@ -56,10 +62,11 @@ module top #(
   .data_in_i3(data_in_i3),
   .data_in_u3(data_in_u3),
   .mclkin(mclkin),
+  .rst(rst),
   .mdat_i1(mdat_i1),
-  .mdat_u1(mdat_u1)
+  .mdat_u1(mdat_u1),
   .mdat_i2(mdat_i2),
-  .mdat_u2(mdat_u2)
+  .mdat_u2(mdat_u2),
   .mdat_i3(mdat_i3),
   .mdat_u3(mdat_u3)
 
@@ -67,6 +74,7 @@ module top #(
 
   filter_sinc3 data_filter_I1 (
   .mclkin(mclkin),
+  .rst(rst),
   .mdata1(mdat_i1),
   .word_clk(word_clk),
   .DATA(FILTERED_DATA_I1)
@@ -75,6 +83,7 @@ module top #(
 
   filter_sinc3 data_filter_U1 (
   .mclkin(mclkin),
+  .rst(rst),
   .mdata1(mdat_u1),
   .word_clk(word_clk),
   .DATA(FILTERED_DATA_U1)
@@ -82,6 +91,7 @@ module top #(
   );
   filter_sinc3 data_filter_I2 (
   .mclkin(mclkin),
+  .rst(rst),
   .mdata1(mdat_i2),
   .word_clk(word_clk),
   .DATA(FILTERED_DATA_I2)
@@ -90,6 +100,7 @@ module top #(
 
   filter_sinc3 data_filter_U2 (
   .mclkin(mclkin),
+  .rst(rst),
   .mdata1(mdat_u2),
   .word_clk(word_clk),
   .DATA(FILTERED_DATA_U2)
@@ -97,6 +108,7 @@ module top #(
   );
   filter_sinc3 data_filter_I3 (
   .mclkin(mclkin),
+  .rst(rst),
   .mdata1(mdat_i3),
   .word_clk(word_clk),
   .DATA(FILTERED_DATA_I3)
@@ -105,6 +117,7 @@ module top #(
 
   filter_sinc3 data_filter_U3 (
   .mclkin(mclkin),
+  .rst(rst),
   .mdata1(mdat_u3),
   .word_clk(word_clk),
   .DATA(FILTERED_DATA_U3)
@@ -113,6 +126,7 @@ module top #(
 
   packager form_pack (
   .clk(mclkin),
+  .rst(rst),
   .data_adc0(FILTERED_DATA_I1),
   .data_adc1(FILTERED_DATA_U1),
   .data_adc2(FILTERED_DATA_I2),
@@ -129,17 +143,31 @@ module top #(
   
   uart_tx #(
   .DATA_BITS(8),
-  .STOP_BITS(2),
   .BAUDRATE(115200),
   .CLK_FREQ(18_750_000)
   
 ) send_data (
   .clk(clk),
+  .rst(rst),
   .tx(data_tx),
+  .tr_start(tr_start),
   .tx_valid(tx_ready_pac),
   .tx_ready(tx_valid_pac),
   .tx_data(data_out)
   
 );  
+
+  manch_encoding  #(
+  .BAUDRATE(115200),
+  .CLK_FREQ(18_750_000)  
+
+) data_manch (
+  .mclkin(mclkin),
+  .rst(rst),
+  .tx(data_out),
+  .tr_start(tr_start),
+  .tx_manch(data_tx)
+
+);
   
 endmodule

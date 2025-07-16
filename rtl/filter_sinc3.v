@@ -6,6 +6,8 @@ module filter_sinc3 #(
   
 ) (
   input                       mclkin,                // тактовая частота для модулятора
+  input                       rst,
+
   input                       mdata1,                // входной поток данных от модулятора
   input                       word_clk,
   output reg [WIDTH - 1: 0]   DATA                   // отфильтрованные данные 
@@ -43,10 +45,25 @@ module filter_sinc3 #(
   end
   
   // Блок интеграторов 
-  always @( negedge mclkin ) begin
-    acc1 <= acc1 + ip_data1;
-    acc2 <= acc2 + acc1;
-    acc3 <= acc3 + acc2;
+  always @( negedge mclkin, posedge  rst) begin
+    if (rst) begin
+       ip_data1
+       acc1    <= 0;
+       acc2    <= 0;
+       acc3    <= 0;
+       acc3_d2 <= 0;
+       diff1   <= 0;
+       diff2   <= 0;
+       diff3   <= 0;
+       diff1_d <= 0;
+       diff2_d <= 0;
+    end else begin
+      acc1 <= acc1 + ip_data1;
+      acc2 <= acc2 + acc1;
+      acc3 <= acc3 + acc2;
+
+    end
+      
   end
 	
   // Блок дифференциаторов

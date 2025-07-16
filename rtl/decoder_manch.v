@@ -116,11 +116,11 @@ always @(posedge clk or posedge reset) begin
             COOLDOWN_S: begin
                 clk_counter <= clk_counter + 1;
                 
-                if (~rx) begin
+                if (clk_counter <= HALFBAUD - 1 && falling_edge == 1'b1) begin
                     state <= IDLE_S;
                     clk_counter <= 0;
                 end
-                else if (clk_counter >= HALFBAUD / 2 - 1 && falling_edge == 1'b1) begin
+                else if (clk_counter >= HALFBAUD - 1 && falling_edge == 1'b1) begin
                     state <= RECEIVE_S;
                     clk_counter <= 0;
                 end
