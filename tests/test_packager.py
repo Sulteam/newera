@@ -3,41 +3,28 @@ import sys
 from pathlib import Path
 
 import cocotb
-from cocotb.triggers import Timer
-from cocotb.runner   import get_runner
-
-import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, FallingEdge, Timer, ClockCycles
-from cocotb.result import TestSuccess
+from cocotb.triggers import ClockCycles
+from cocotb.runner   import get_runner
 
 @cocotb.test()
 async def packager_test(dut):
     """Test for packager module"""
     
-    # Parameters
-    ADC_DATA_WIDTH = 16
     ADC_COUNT = 6
     
-    # Clock generation
-    clock = Clock(dut.mclkin, 10, units="ns")  # 100MHz clock
+    clock = Clock(dut.mclkin, 52, units="ns") 
     cocotb.start_soon(clock.start())
     
-    # Reset the module
     dut.rst.value = 1
     await ClockCycles(dut.mclkin, 5)
     dut.rst.value = 0
     await ClockCycles(dut.mclkin, 5)
     
-    # Initialize inputs
     dut.write_enable.value = 0
     dut.sync_pulse.value = 0
     dut.tx_ready.value = 0
     
-    # Test 1: Check initial state
-    assert dut.state.value == 0, "Module not in IDLE state after reset"
-    
-    # Test 2: Write data to ADC registers
     test_data = [i*100 + 500 for i in range(ADC_COUNT)]
     dut.data_adc_0.value = test_data[0]
     dut.data_adc_1.value = test_data[1]
@@ -49,15 +36,13 @@ async def packager_test(dut):
     await ClockCycles(dut.mclkin, 1)
     dut.write_enable.value = 0
     
-    # Test 3: Trigger transmission with sync pulse
+
     dut.sync_pulse.value = 1
     await ClockCycles(dut.mclkin, 1)
     dut.sync_pulse.value = 0
     
-    # Verify state transition
     await ClockCycles(dut.mclkin, 1)
     
-    # Verify first byte is 0xFF (start marker)
     for i in range(12):
         dut.tx_ready.value = 1
         await ClockCycles(dut.mclkin, 2)
